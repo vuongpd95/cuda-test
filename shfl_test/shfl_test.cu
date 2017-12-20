@@ -32,19 +32,20 @@ void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
 	}
 }
 
-__global__ void func(int *value) {
-	printf("value[%d] = %d\nvalue[%d] = %d\n", \
-		value[0], value[0], value[1], value[1]);
+__global__ void bcast(int arg) {
+	int laneId = threadIdx.x & 0x1f; 
+	int value; 
+	if (laneId == 0) 			// Note unused variable for 
+		value = arg; 			// all threads except lane 0 
+	value = __shfl_sync(0xffffffff, value, 0); // Synchronize all threads in warp, and get "value" from lane 0 
+	if (value != arg) 
+		printf("Thread %d failed.\n", threadIdx.x); 
+} 
+
+int main() { 
+	bcast<<< 1, 32 >>>(1234); 
+	cudaDeviceSynchronize(); 
+	return 0; 
 }
 
-int main(int argc, char *argv[])
-{
-	int *value;
-	gpuErrchk(cudaMallocManaged(&value, 2 * sizeof(int)));
-	value[0] = 0;
-	value[1] = 1;
-	func<<<1, 1>>>(value);
-	gpuErrchk(cudaDeviceSynchronize());
-	gpuErrchk(cudaFree(value));
-	return 0;
-}
+

@@ -32,19 +32,16 @@ void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
 	}
 }
 
-__global__ void func(int *value) {
-	printf("value[%d] = %d\nvalue[%d] = %d\n", \
-		value[0], value[0], value[1], value[1]);
+__global__ void func() {
+	for(int i = 0; i < 1000; i++);
 }
 
 int main(int argc, char *argv[])
 {
-	int *value;
-	gpuErrchk(cudaMallocManaged(&value, 2 * sizeof(int)));
-	value[0] = 0;
-	value[1] = 1;
-	func<<<1, 1>>>(value);
+	dim3 thread_per_block(1024);
+	int num_block = 1024;
+	func<<<num_block, thread_per_block>>>();
+	gpuErrchk(cudaPeekAtLastError());
 	gpuErrchk(cudaDeviceSynchronize());
-	gpuErrchk(cudaFree(value));
 	return 0;
 }

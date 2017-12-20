@@ -32,19 +32,32 @@ void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
 	}
 }
 
-__global__ void func(int *value) {
-	printf("value[%d] = %d\nvalue[%d] = %d\n", \
-		value[0], value[0], value[1], value[1]);
+__global__ 
+void func(int *num) {
+	int tid = blockIdx.x * blockDim.x + threadIdx.x;
+	__shared__ int s_num[8];
+	s_num[threadIdx.x] = num[tid];
+	__syncthreads();
+	if (tid == 8) {
+		for(int i = 0; i < 8; i++) {
+			printf("In global: num[%d] = %d | ", tid + i, num[tid + i]);
+			printf("In shared: s_num[%d] = %d.\n", threadIdx.x + i, s_num[threadIdx.x + i]);
+		}
+	}
 }
 
 int main(int argc, char *argv[])
 {
-	int *value;
-	gpuErrchk(cudaMallocManaged(&value, 2 * sizeof(int)));
-	value[0] = 0;
-	value[1] = 1;
-	func<<<1, 1>>>(value);
+	int *num = (int*)malloc(8 * 8 * sizeof(int));
+	for(int i = 0; i < 8 * 8; i++) num[i] = i;
+	int *d_num;
+	gpuErrchk(cudaMalloc(&d_num, 8 * 8 * sizeof(int)));
+	gpuErrchk(cudaMemcpy(d_num, num, 8 * 8 * sizeof(int), \
+		cudaMemcpyHostToDevice));
+	dim3 thread_per_block(8);
+	int num_block = 8;
+	func<<<num_block, thread_per_block>>>(d_num);
+	gpuErrchk(cudaPeekAtLastError());
 	gpuErrchk(cudaDeviceSynchronize());
-	gpuErrchk(cudaFree(value));
 	return 0;
 }
