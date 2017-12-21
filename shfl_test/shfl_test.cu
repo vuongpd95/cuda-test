@@ -33,13 +33,15 @@ void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
 }
 
 __global__ void bcast(int arg) {
-	int laneId = threadIdx.x & 0x1f; 
+	int laneId = threadIdx.x % 32; 
 	int value; 
 	if (laneId == 0) 			// Note unused variable for 
 		value = arg; 			// all threads except lane 0 
-	value = __shfl_sync(0xffffffff, value, 0); // Synchronize all threads in warp, and get "value" from lane 0 
+	value = __shfl(value, 0, 32); // Synchronize all threads in warp, and get "value" from lane 0 
 	if (value != arg) 
-		printf("Thread %d failed.\n", threadIdx.x); 
+		printf("Thread %d failed. value = %d\n", threadIdx.x, value);
+	else
+		printf("Thread %d success. value = %d\n", threadIdx.x, value); 
 } 
 
 int main() { 
