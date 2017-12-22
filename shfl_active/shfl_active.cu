@@ -22,7 +22,7 @@
 #include <inttypes.h>
 
 #define WARP 32
-#define LANE 2
+#define LANE 3
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
 {
@@ -40,41 +40,55 @@ typedef struct {
 } eh_t;
 
 __device__
-bool check_active(eh_t data) {
-	if(data.h != -1 && data.e != -1) return true;
+bool check_active(int32_t h, int32_t e) {
+	if(h != -1 && e != -1) return true;
 	else return false;
 }
 __device__
-void reset(eh_t *data) {
-	data->h = -1;
-	data->e = -1;
+void reset(int32_t *h, int32_t *e) {
+	*h = -1;
+	*e = -1;
 }
+
 __global__ 
 void func_0(int qlen, eh_t *d_qp) {
-	int tid = blockIdx.x * blockDim.x + threadIdx.x;
-	int lane_id = threadIdx.x % 32;
-	eh_t data_out, data_in;
-	reset(&data_in); reset(&data_out);
+	// int tid = blockIdx.x * blockDim.x + threadIdx.x;
+	int lane_id = threadIdx.x % WARP;
+	int in_h, in_e;
+	int out_h, out_e;
+	reset(&in_h, &in_e); reset(&out_h, &out_e);
 	int beg = 0;
-	if(lane_id == LANE) printf("Lane %d, received: ");
-	if(lane_id == 0) memcpy(s_qp, d_qp, sizeof(int8_t) * (qlen + 1));
+	if(lane_id == LANE) printf("Lane %d, received: ", lane_id);
 	if(lane_id == 0) {
-		data_out = s_qp[beg];
+		out_h = d_qp[beg].h;
+		out_e = d_qp[beg].e;
 		beg += 1;
 	}
 	__syncthreads();
+	
 	do {
-		if(lane_id == 0) data_in = s_qp[beg];
-		else data_in = __shfl(data_out, lane_id - 1, WARP);
-		if(check_active(data_in)) {
-			if(lane_id == LANE) printf("[%ld, %ld] ", data_in.h, data_in.e);
-			data_out = data_in;
-			reset(&data_in);
+		if(lane_id == 0) {
+			in_h = d_qp[beg].h;
+			in_e = d_qp[beg].e;
+			
+		}
+		else {
+			in_h = __shfl(out_h, lane_id - 1, WARP);
+			in_e = __shfl(out_e, lane_id - 1, WARP);
+		}
+		__syncthreads();
+		if(check_active(in_h, in_e)) {
+			if(lane_id == LANE) printf("[%d, %d] ", in_h, in_e);
+			out_h = in_h;
+			out_e = in_e;
+			reset(&in_h, &in_e);
 			beg += 1;
 		} else {
 			if(lane_id == LANE) printf("[nothing] ");
 		}
+		__syncthreads();	
 	} while(beg < qlen);
+	if(lane_id == LANE) printf("\n");	
 }
 
 int main(int argc, char *argv[])
@@ -83,13 +97,12 @@ int main(int argc, char *argv[])
 	printf("Input qlen = ");
 	scanf("%d", &qlen);
 
-	int8_t *h_qp, *d_qp;
-	h_qp = (int8_t*)malloc(sizeof(eh_t) * (qlen + 1)));
-	int k = 0;
+	eh_t *h_qp, *d_qp;
+	h_qp = (eh_t*)malloc(sizeof(eh_t) * (qlen + 1));
 	for(int i = 0; i <= qlen; i++) {
-		h_qp[i].h = h_qp[i].e = i;
+		h_qp[i].h = i;
+		h_qp[i].e = i;
 	}
-
 	gpuErrchk(cudaMalloc(&d_qp, sizeof(eh_t) * (qlen + 1)));
 	gpuErrchk(cudaMemcpy(d_qp, h_qp, sizeof(eh_t) * (qlen + 1), cudaMemcpyHostToDevice));
 
@@ -100,7 +113,7 @@ int main(int argc, char *argv[])
 	cudaEventCreate(&start);
 	cudaEventRecord(start, 0);
 
-	func_0<<<1, WARP, qlen + 1>>>(qlen, d_qp);
+	func_0<<<1, WARP>>>(qlen, d_qp);
 	gpuErrchk(cudaPeekAtLastError());
 	gpuErrchk(cudaDeviceSynchronize());
 
