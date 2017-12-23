@@ -1,4 +1,4 @@
-/******************************************************************************
+ /******************************************************************************
 * PROGRAM: copyStruture
 * PURPOSE: This program is a test which test the ability to transfer multilevel 
 *	C++ structured data from host to device, modify them and transfer back.
@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+#define WARP 32
 void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
 {
 	if (code != cudaSuccess)
@@ -31,87 +32,72 @@ void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
 			exit(code);
 	}
 }
-/* Test Structures */
-typedef struct {
-	int64_t rbeg;
-	int32_t qbeg, len;
-	int score;
-} mem_seed_t; // unaligned memory
 
-typedef struct {
-	int n, m, first, rid;
-	uint32_t w:29, kept:2, is_alt:1;
-	float frac_rep;
-	int64_t pos;
-	mem_seed_t *seeds;
-} mem_chain_t;
-
-void init_seeds(mem_seed_t *seeds, int len) {
-	for(int i = 0; i < len; i++) {
-		seeds[i].score = i;
-	}
-}
-
-void init_chains(mem_chain_t *chains, int len) {
-	for(int i = 0; i < len; i++) {
-		chains[i].n = i;
-	}
-}
-extern __shared__ float container[];
-__device__ unsigned int lock = 0;
+extern __shared__ int32_t container[];
 __global__ 
-void func(mem_seed_t *seeds, int len_seeds, mem_chain_t *chains, int len_chains, int len_container) {
-	
-	int tid = blockIdx.x * blockDim.x + threadIdx.x;
-	bool leave_loop = false;
-	mem_chain_t *shared_chains = (mem_chain_t*)&container;
-	mem_seed_t *shared_seeds = (mem_seed_t*)&shared_chains[len_chains];
-	while (!leave_loop && threadIdx.x == 0) {
-		if (atomicExch(&lock, 1) == 0) {
-			// critical section
-			memcpy(shared_seeds, seeds, len_seeds * sizeof(mem_seed_t));
-			memcpy(shared_chains, chains, len_chains * sizeof(mem_chain_t));
-			// end critical section
-			leave_loop = true;
-			atomicExch(&lock, 0);
+void func(int qlen, int m, int32_t *e, int32_t *h, int8_t *qp) {
+	int lane_id = threadIdx.x % WARP;
+	int32_t *se, *sh;
+	int8_t *sqp;
+	sh = container;
+	se = (int32_t*)&sh[qlen + 1];
+	sqp = (int8_t*)&se[qlen + 1];
+	int i = lane_id;
+	for(;;) {
+		if(i < qlen + 1) {
+			sh[i] = h[i];
+			se[i] = e[i];		
 		}
+		if(i < qlen * m) sqp[i] = qp[i];
+		else break;
+		i += WARP;
 	}
 	__syncthreads();
-	if (tid == 1) {
-		for(int i = 0; i < len_seeds; i++) {
-			printf("shared_seeds[%d].score = %d\n", i, shared_seeds[i].score);		
+	if(lane_id == 0) {
+		printf("[h, e]: ");
+		for(i = 0; i < qlen + 1; i++) {
+			printf("[%d, %d] ", sh[i], se[i]);		
+		}	
+		printf("\n[qp]: \n");
+		for(i = 0; i < qlen * m; i++) {
+			printf("%d ", sqp[i]);
+			if(i % qlen == 0) printf("\n");		
 		}
-		for(int i = 0; i < len_chains; i++) {
-			printf("shared_chains[%d].n = %d\n", i, shared_chains[i].n);
-		}
+		printf("\n");
 	}
 }
 
 int main(int argc, char *argv[])
 {
-	int len_seeds, len_chains;
-	len_seeds = 10;
-	len_chains = 20;
-	
-	mem_seed_t *seeds = (mem_seed_t*)malloc(len_seeds * sizeof(mem_seed_t));
-	mem_chain_t *chains = (mem_chain_t*)malloc(len_chains * sizeof(mem_chain_t));
+	int qlen, m, i;
+	int32_t *e, *h, *d_e, *d_h;
+	int8_t *qp, *d_qp;
+	printf("Input qlen = ");
+	scanf("%d", &qlen);
 
-	init_seeds(seeds, len_seeds); init_chains(chains, len_chains);
-	printf("sizeof(mem_seed_t) = %lu, sizeof(mem_chain_t) = %lu\n", sizeof(mem_seed_t), sizeof(mem_chain_t));
-	int len_container = (len_seeds * sizeof(mem_seed_t) + len_chains * sizeof(mem_chain_t)) / sizeof(float);
-	
-	mem_seed_t *d_seeds;
-	mem_chain_t *d_chains;
+	printf("Input m = ");
+	scanf("%d", &m);
 
-	gpuErrchk(cudaMalloc(&d_seeds, len_seeds * sizeof(mem_seed_t)));
-	gpuErrchk(cudaMalloc(&d_chains, len_chains * sizeof(mem_chain_t)));
+	e = (int32_t*)calloc(qlen + 1, sizeof(int32_t));
+	h = (int32_t*)calloc(qlen + 1, sizeof(int32_t));
+	qp = (int8_t*)malloc(qlen * m);
 
-	gpuErrchk(cudaMemcpy(d_seeds, seeds, len_seeds * sizeof(mem_seed_t), \
-			cudaMemcpyHostToDevice));
-	gpuErrchk(cudaMemcpy(d_chains, chains, len_chains * sizeof(mem_chain_t), \
-			cudaMemcpyHostToDevice));
+	for(i = 0; i < qlen + 1; i++) {
+		e[i] = i; h[i] = i; 	
+	}
+	for(i = 0; i < qlen * m; i++) {
+		qp[i] = i % 128;
+	}
 
-	func<<<2, 5, len_container>>>(d_seeds, len_seeds, d_chains, len_chains, len_container);
+	gpuErrchk(cudaMalloc(&d_e, sizeof(int32_t) * (qlen + 1)));
+	gpuErrchk(cudaMalloc(&d_h, sizeof(int32_t) * (qlen + 1)));
+	gpuErrchk(cudaMalloc(&d_qp, sizeof(int8_t) * qlen * m));
+
+	gpuErrchk(cudaMemcpy(d_e, e, sizeof(int32_t) * (qlen + 1), cudaMemcpyHostToDevice));
+	gpuErrchk(cudaMemcpy(d_h, h, sizeof(int32_t) * (qlen + 1), cudaMemcpyHostToDevice));
+	gpuErrchk(cudaMemcpy(d_qp, qp, sizeof(int8_t) * qlen * m, cudaMemcpyHostToDevice));	
+
+	func<<<1, WARP, 2 * (qlen + 1) * sizeof(int32_t) + qlen * m * sizeof(int8_t)>>>(qlen, m, d_e, d_h, d_qp);
 	gpuErrchk(cudaPeekAtLastError());
 	gpuErrchk(cudaDeviceSynchronize());
 	return 0;
