@@ -32,8 +32,8 @@ __global__ void func(unsigned int *comm) {
 	while(blocked) {
 	    if(0 == atomicCAS(&mLock, 0, 1)) {
 
-	    	comm += 1;
-	    	printf("Block Id = %d, Thread Id = %d, comm = %u", blockIdx.x, threadIdx.x, *comm);
+	    	*comm += 1;
+	    	printf("Block Id = %d, Thread Id = %d, comm = %u\n", blockIdx.x, threadIdx.x, *comm);
 	        atomicExch(&mLock, 0);
 	        blocked = false;
 	    }
@@ -44,7 +44,8 @@ int main(void)
 	unsigned int *d_comm;
 	gpuErrchk(cudaMalloc(&d_comm, sizeof(unsigned int)));
 	gpuErrchk(cudaMemset(d_comm, 0, sizeof(unsigned int)));
-	func<<<2, 32>>>(d_comm);
+	func<<<10, 64>>>(d_comm);
+	gpuErrchk(cudaDeviceSynchronize());
 	gpuErrchk(cudaPeekAtLastError());
 	return 0;
 }
