@@ -4,7 +4,8 @@
  Author      : vuongp
  Version     :
  Copyright   : Your copyright notice
- Description : CUDA thread wide lock
+ Description : CUDA thread wide lock, this code works well at the moment but
+	there is no guarantee that it will work with all GPU architecture.
  ============================================================================
  */
 
@@ -31,10 +32,11 @@ __global__ void func(unsigned int *comm) {
 	bool blocked = true;	
 	while(blocked) {
 	    if(0 == atomicCAS(&mLock, 0, 1)) {
-
+		printf("Block Id = %d, Thread Id = %d acquired lock\n", blockIdx.x, threadIdx.x);
 	    	*comm += 1;
 	    	printf("Block Id = %d, Thread Id = %d, comm = %u\n", blockIdx.x, threadIdx.x, *comm);
 	        atomicExch(&mLock, 0);
+		printf("Block Id = %d, Thread Id = %d released lock\n", blockIdx.x, threadIdx.x);
 	        blocked = false;
 	    }
 	}
